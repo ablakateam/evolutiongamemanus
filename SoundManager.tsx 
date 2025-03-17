@@ -1,0 +1,181 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+
+interface Sound {
+  id: string;
+  url: string;
+  volume: number;
+  loop: boolean;
+}
+
+interface SoundManagerProps {
+  isMuted: boolean;
+  setIsMuted: (muted: boolean) => void;
+}
+
+export default function SoundManager({ isMuted, setIsMuted }: SoundManagerProps) {
+  const [isInitialized, setIsInitialized] = useState(false);
+  const audioContext = useRef<AudioContext | null>(null);
+  const soundBuffers = useRef<Map<string, AudioBuffer>>(new Map());
+  const soundSources = useRef<Map<string, AudioBufferSourceNode>>(new Map());
+  const gainNodes = useRef<Map<string, GainNode>>(new Map());
+  
+  const sounds: Sound[] = [
+    { id: 'background', url: '/sounds/ambient_water.mp3', volume: 0.3, loop: true },
+    { id: 'absorb', url: '/sounds/absorb.mp3', volume: 0.5, loop: false },
+    { id: 'evolve', url: '/sounds/evolve.mp3', volume: 0.7, loop: false },
+    { id: 'damage', url: '/sounds/damage.mp3', volume: 0.6, loop: false },
+    { id: 'speedburst', url: '/sounds/speedburst.mp3', volume: 0.5, loop: false },
+    { id: 'toxin', url: '/sounds/toxin.mp3', volume: 0.6, loop: false },
+    { id: 'ally', url: '/sounds/ally.mp3', volume: 0.5, loop: false },
+    { id: 'gameover', url: '/sounds/gameover.mp3', volume: 0.7, loop: false },
+  ];
+
+  // Initialize audio context on user interaction
+  const initializeAudio = () => {
+    if (isInitialized) return;
+    
+    try {
+      audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Load all sound files
+      sounds.forEach(sound => {
+        loadSound(sound.id, sound.url);
+      });
+      
+      setIsInitialized(true);
+    } catch (error) {
+      console.error('Audio initialization failed:', error);
+    }
+  };
+
+  // Load a sound file
+  const loadSound = async (id: string, url: string) => {
+    if (!audioContext.current) return;
+    
+    try {
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await audioContext.current.decodeAudioData(arrayBuffer);
+      soundBuffers.current.set(id, audioBuffer);
+      
+      // Start background music automatically
+      if (id === 'background') {
+        playSound('background', true);
+      }
+    } catch (error) {
+      console.error(`Failed to load sound ${id}:`, error);
+    }
+  };
+
+  // Play a sound
+  const playSound = (id: string, loop: boolean = false) => {
+    if (!audioContext.current || !soundBuffers.current.has(id) || isMuted) return;
+    
+    // Stop previous instance if it exists
+    stopSound(id);
+    
+    const buffer = soundBuffers.current.get(id);
+    if (!buffer) return;
+    
+    const source = audioContext.current.createBufferSource();
+    source.buffer = buffer;
+    source.loop = loop;
+    
+    const gainNode = audioContext.current.createGain();
+    const sound = sounds.find(s => s.id === id);
+    gainNode.gain.value = sound ? sound.volume : 0.5;
+    
+    source.connect(gainNode);
+    gainNode.connect(audioContext.current.destination);
+    
+    source.start();
+    soundSources.current.set(id, source);
+    gainNodes.current.set(id, gainNode);
+    
+    // Clean up non-looping sounds when they finish
+    if (!loop) {
+      source.onended = () => {
+        soundSources.current.delete(id);
+        gainNodes.current.delete(id);
+      };
+    }
+  };
+
+  // Stop a sound
+  const stopSound = (id: string) => {
+    const source = soundSources.current.get(id);
+    if (source) {
+      try {
+        source.stop();
+      } catch (e) {
+        // Ignore errors if sound already stopped
+      }
+      soundSources.current.delete(id);
+      gainNodes.current.delete(id);
+    }
+  };
+
+  // Update mute state
+  useEffect(() => {
+    if (!audioContext.current) return;
+    
+    if (isMuted) {
+      // Mute all sounds
+      gainNodes.current.forEach(gainNode => {
+        gainNode.gain.value = 0;
+      });
+    } else {
+      // Restore volumes
+      gainNodes.current.forEach((gainNode, id) => {
+        const sound = sounds.find(s => s.id === id);
+        gainNode.gain.value = sound ? sound.volume : 0.5;
+      });
+    }
+  }, [isMuted, sounds]);
+
+  // Expose sound functions to window for global access
+  useEffect(() => {
+    if (!isInitialized) return;
+    
+    (window as any).gameAudio = {
+      play: playSound,
+      stop: stopSound,
+      mute: () => setIsMuted(true),
+      unmute: () => setIsMuted(false)
+    };
+    
+    return () => {
+      delete (window as any).gameAudio;
+    };
+  }, [isInitialized, setIsMuted]);
+
+  return (
+    <div className="absolute bottom-16 left-4 z-10">
+      <button
+        onClick={() => {
+          initializeAudio();
+          setIsMuted(!isMuted);
+        }}
+        className="bg-black bg-opacity-70 p-2 rounded text-white hover:bg-opacity-90 transition-all"
+        aria-label={isMuted ? "Unmute" : "Mute"}
+      >
+        {isMuted ? (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="1" y1="1" x2="23" y2="23"></line>
+            <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path>
+            <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+        )  : (
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+          </svg>
+        ) }
+      </button>
+    </div>
+  );
+}
